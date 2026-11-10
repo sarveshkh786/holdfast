@@ -97,8 +97,14 @@ async function send(text) {
   if (!text.trim()) return;
   add('user', text);
   const typing = add('bot', '…');
-  const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, clientName, message: text }) });
-  const data = await r.json();
+  let data;
+  try {
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, clientName, message: text }), signal: AbortSignal.timeout(60000) });
+    data = await r.json();
+  } catch (e) {
+    typing.textContent = 'Connection hiccup (the free server may be waking up). Please send your message again.';
+    return;
+  }
   typing.textContent = data.reply || data.error;
   if (data.fallback) { const t = document.createElement('div'); t.className = 'trace'; t.textContent = 'ⓘ AI model busy, answered by HoldFast built-in agent'; $('#chat').insertBefore(t, typing); }
   if (data.trace?.length) { const t = document.createElement('div'); t.className = 'trace'; t.textContent = '⚙ ' + data.trace.map((x) => x.tool).join(' → '); $('#chat').insertBefore(t, typing); }

@@ -173,7 +173,9 @@ $('#oform').onsubmit = async (e) => {
   e.preventDefault(); const v = $('#oinput').value.trim(); if (!v) return; $('#oinput').value = '';
   const log = $('#olog');
   log.insertAdjacentHTML('beforeend', `<div class="msg user">${v.replace(/</g, '&lt;')}</div>`);
-  const r = await post('/api/owner/chat', { sessionId: 'owner', message: v });
+  let r;
+  try { r = await post('/api/owner/chat', { sessionId: 'owner', message: v }); }
+  catch (e) { r = { reply: 'Connection hiccup (the free server may be waking up). Please try again.' }; }
   log.insertAdjacentHTML('beforeend', `${r.fallback ? '<div class="trace">ⓘ AI model busy, built-in agent answered</div>' : ''}<div class="msg bot">${(r.reply || r.error || '').replace(/</g, '&lt;')}</div>`);
   log.scrollTop = 1e9; load();
 };
