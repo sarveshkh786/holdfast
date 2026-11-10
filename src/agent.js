@@ -134,16 +134,22 @@ async function claudeTurn(role, history, ctx) {
 // ---------------- Gemini loop (function calling via REST) ----------------
 let geminiModel = null;
 async function geminiCall(body) {
-  const models = geminiModel ? [geminiModel] : GEMINI_MODELS;
+  // Try the working model first, then the others. Retry briefly on overload (429/500/503).
+  const models = geminiModel ? [geminiModel, ...GEMINI_MODELS.filter((m) => m !== geminiModel)] : GEMINI_MODELS;
   let lastErr;
   for (const m of models) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (res.ok) { geminiModel = m; return json; }
-    lastErr = new Error(`Gemini ${m}: ${res.status} ${json.error?.message || ''}`);
-    if (res.status !== 404 && res.status !== 400) break;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) { geminiModel = m; return json; }
+      lastErr = new Error(`Gemini ${m}: ${res.status} ${json.error?.message || ''}`);
+      console.error(lastErr.message);
+      if (res.status === 401 || res.status === 403) throw lastErr; // bad key: no point retrying
+      if (![429, 500, 503].includes(res.status)) break;            // 400/404: try next model
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+    }
   }
   throw lastErr;
 }
