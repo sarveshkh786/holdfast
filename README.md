@@ -59,7 +59,7 @@ npm run paypal:smoke     # verify your sandbox credentials against real PayPal
 3. (Optional) Add a webhook in the app to `https://<your-host>/api/webhooks/paypal` for `PAYMENT.AUTHORIZATION.*` and `PAYMENT.CAPTURE.*`, put its id in `PAYPAL_WEBHOOK_ID`.
 
 ### For judges
-- Hosted demo: `<RENDER URL>`
+- Hosted demo: https://holdfast-zkbo.onrender.com (client chat) and https://holdfast-zkbo.onrender.com/owner.html (owner dashboard). Free tier: first load after idle can take ~50s.
 - Sandbox buyer login: `<sandbox personal email>` / `<password>`
 - Try: open the client chat as **Priya Sharma** (high risk) vs **Ravi Kumar** (reliable) and ask for the same service. Notice the different holds. Then open the owner dashboard.
 - "Reset demo" (owner dashboard, top right) restores seed data.
