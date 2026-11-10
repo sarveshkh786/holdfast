@@ -31,11 +31,11 @@ All calls use `PayPal-Request-Id` idempotency keys.
 
 ## How AI is used
 
-- **Receptionist agent** (Claude, tool use): `list_services`, `check_availability`, `quote_hold`, `book_appointment`, `my_bookings`, `cancel_booking`, `join_waitlist`. It must quote the hold and fee policy in plain words before booking.
-- **Ops agent** (Claude, tool use) for the owner: "Priya didn't show" → `flag_no_show`; "Sam arrived" → `mark_attended`.
+- **Receptionist agent** (LLM tool use: Claude via `ANTHROPIC_API_KEY`, or Google Gemini via `GEMINI_API_KEY`): `list_services`, `check_availability`, `quote_hold`, `book_appointment`, `my_bookings`, `cancel_booking`, `join_waitlist`. It must quote the hold and fee policy in plain words before booking.
+- **Ops agent** (same LLM, tool use) for the owner: "Priya didn't show" → `flag_no_show`; "Sam arrived" → `mark_attended`.
 - **Human in the loop:** no agent tool can capture money. Captures only happen through the owner's **Confirm charge** button.
 - **Risk scoring with explanations:** the hold is 20–100% of price, capped at the price, based only on booking behaviour with this business (attendance history, lead time, slot time). No names, demographics, location or device data. Owners can open any booking and see exactly why the hold is that size.
-- Without an `ANTHROPIC_API_KEY`, an offline rule-based agent runs so the app still works.
+- Without any AI key, an offline rule-based agent runs so the app still works. The header badge always shows which AI mode is active.
 
 ## Sponsor tools
 
@@ -80,7 +80,7 @@ owner buttons ─▶ /api/owner/* ───────────────�
 ```
 
 ## AI tools used to build this
-- Claude: the in-app agents (receptionist + ops) via the Anthropic API.
+- Claude (Anthropic API) or Gemini (Google AI): the in-app agents (receptionist + ops) via tool/function calling.
 - Claude: assisted with code scaffolding during development.
 
 ## License

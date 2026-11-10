@@ -2,14 +2,17 @@
 //  - Receptionist (client-facing chat): books, quotes holds, cancels, waitlists.
 //  - Ops assistant (owner-facing): marks attendance, flags no-shows, proposes fees.
 // Money only moves through bookings.js; captures additionally require the owner's click.
-// Uses Claude tool-use when ANTHROPIC_API_KEY is set, otherwise a rule-based fallback.
+// Uses Claude tool-use when ANTHROPIC_API_KEY is set, Gemini function calling when
+// GEMINI_API_KEY is set (free tier), otherwise a rule-based fallback.
 import Anthropic from '@anthropic-ai/sdk';
 import * as store from './store.js';
 import * as bk from './bookings.js';
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
-export const AI_MODE = anthropic ? `claude (${MODEL})` : 'offline rule-based';
+const GEMINI_KEY = !anthropic && process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY : null;
+const GEMINI_MODELS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean);
+export const AI_MODE = anthropic ? `claude (${MODEL})` : GEMINI_KEY ? `gemini (${GEMINI_MODELS[0]})` : 'offline rule-based';
 
 const tz = () => store.get().business.timezone;
 const fmt = (iso) => new Date(iso).toLocaleString('en-US', { timeZone: tz(), weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -128,6 +131,56 @@ async function claudeTurn(role, history, ctx) {
   return 'Sorry, that took too many steps. Could you rephrase?';
 }
 
+// ---------------- Gemini loop (function calling via REST) ----------------
+let geminiModel = null;
+async function geminiCall(body) {
+  const models = geminiModel ? [geminiModel] : GEMINI_MODELS;
+  let lastErr;
+  for (const m of models) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) { geminiModel = m; return json; }
+    lastErr = new Error(`Gemini ${m}: ${res.status} ${json.error?.message || ''}`);
+    if (res.status !== 404 && res.status !== 400) break;
+  }
+  throw lastErr;
+}
+
+const toGeminiTool = (t) => {
+  const d = { name: t.name, description: t.description };
+  if (t.input_schema.properties && Object.keys(t.input_schema.properties).length) d.parameters = t.input_schema;
+  return d;
+};
+
+async function geminiTurn(role, history, ctx) {
+  const tools = role === 'owner' ? ownerTools : clientTools;
+  const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  for (let i = 0; i < 8; i++) {
+    const res = await geminiCall({
+      system_instruction: { parts: [{ text: systemPrompt(role, ctx) }] },
+      contents,
+      tools: [{ functionDeclarations: tools.map(toGeminiTool) }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 800 },
+    });
+    const content = res.candidates?.[0]?.content;
+    if (!content?.parts?.length) return 'Sorry, I could not answer that. Could you rephrase?';
+    contents.push({ role: 'model', parts: content.parts });
+    const calls = content.parts.filter((p) => p.functionCall);
+    if (!calls.length) return content.parts.map((p) => p.text || '').join('').trim();
+    const responses = [];
+    for (const { functionCall: fc } of calls) {
+      let out;
+      try { out = await runTool(fc.name, fc.args || {}, ctx); ctx.trace.push({ tool: fc.name, input: fc.args }); }
+      catch (e) { out = { error: e.message }; ctx.trace.push({ tool: fc.name, input: fc.args, error: e.message }); }
+      responses.push({ functionResponse: { name: fc.name, response: { result: out } } });
+    }
+    contents.push({ role: 'user', parts: responses });
+  }
+  return 'Sorry, that took too many steps. Could you rephrase?';
+}
+
 // ---------------- offline fallback ----------------
 function parseWhen(text) {
   const t = text.toLowerCase();
@@ -207,7 +260,9 @@ export async function chat({ role = 'client', sessionId, clientName, message }) 
   const ctx = { clientName: clientName || 'Guest', actions: [], trace: [], state: s.state };
   let reply;
   try {
-    reply = anthropic ? await claudeTurn(role, s.history, ctx) : await fallbackTurn(role, s.history, ctx);
+    reply = anthropic ? await claudeTurn(role, s.history, ctx)
+      : GEMINI_KEY ? await geminiTurn(role, s.history, ctx).catch((e) => { console.error(e.message); return fallbackTurn(role, s.history, ctx); })
+      : await fallbackTurn(role, s.history, ctx);
   } catch (e) {
     console.error(e);
     reply = e.userFacing ? e.message : `Sorry, something went wrong (${e.message}).`;
