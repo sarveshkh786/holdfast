@@ -295,7 +295,17 @@ export async function chat({ role = 'client', sessionId, clientName, message }) 
   let reply; let fallback = !anthropic && !GEMINI_KEY;
   try {
     reply = anthropic ? await claudeTurn(role, s.history, ctx)
-      : GEMINI_KEY ? await geminiTurn(role, s.history, ctx).catch((e) => { console.error(e.message); fallback = true; return fallbackTurn(role, s.history, ctx); })
+      : GEMINI_KEY ? await geminiTurn(role, s.history, ctx).catch((e) => {
+        console.error(e.message);
+        // If the AI already changed something before timing out, don't redo it in the fallback.
+        const done = ctx.trace.filter((t) => !t.error && ['book_appointment', 'cancel_booking', 'join_waitlist', 'mark_attended', 'flag_no_show', 'waive_fee'].includes(t.tool));
+        if (done.length) {
+          fallback = true;
+          const msg = { book_appointment: 'Your slot is reserved. Approve the hold with the PayPal button below to confirm it.', cancel_booking: 'Your booking has been cancelled.', join_waitlist: "You're on the waitlist. I'll send you an offer right here if a slot opens.", mark_attended: 'Marked as attended and the hold was released.', flag_no_show: 'Flagged as a no-show. Confirm or waive the fee on the review card.', waive_fee: 'Fee waived and hold released.' };
+          return done.map((t) => msg[t.tool]).join(' ');
+        }
+        fallback = true; return fallbackTurn(role, s.history, ctx);
+      })
       : await fallbackTurn(role, s.history, ctx);
   } catch (e) {
     console.error(e);

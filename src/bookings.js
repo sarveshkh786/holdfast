@@ -165,6 +165,8 @@ export async function ownerWaive(bookingId) {
 export function joinWaitlist({ clientName, serviceId, date }) {
   const svc = store.service(serviceId) || fail(`Unknown service "${serviceId}"`);
   const client = store.findClient({ name: clientName });
+  const existing = store.get().waitlist.find((x) => x.clientId === client.id && x.serviceId === svc.id && x.date === date && ['WAITING', 'OFFERED'].includes(x.status));
+  if (existing) return existing; // idempotent: never double-add the same person
   const w = { id: store.id('wl'), clientId: client.id, clientName: client.name, serviceId: svc.id, serviceName: svc.name, date, status: 'WAITING', createdAt: new Date().toISOString() };
   store.get().waitlist.push(w);
   store.save();
