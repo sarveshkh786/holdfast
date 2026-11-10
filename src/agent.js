@@ -11,7 +11,7 @@ import * as bk from './bookings.js';
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 const GEMINI_KEY = !anthropic && process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY : null;
-const GEMINI_MODELS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean);
+const GEMINI_MODELS = [process.env.GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean);
 export const AI_MODE = anthropic ? `claude (${MODEL})` : GEMINI_KEY ? `gemini (${GEMINI_MODELS[0]})` : 'offline rule-based';
 
 const tz = () => store.get().business.timezone;
@@ -133,6 +133,7 @@ async function claudeTurn(role, history, ctx) {
 
 // ---------------- Gemini loop (function calling via REST) ----------------
 let geminiModel = null;
+let geminiDiscovered = false;
 async function geminiCall(body) {
   // Try the working model first, then the others. Retry briefly on overload (429/500/503).
   const models = geminiModel ? [geminiModel, ...GEMINI_MODELS.filter((m) => m !== geminiModel)] : GEMINI_MODELS;
@@ -150,6 +151,20 @@ async function geminiCall(body) {
       if (![429, 500, 503].includes(res.status)) break;            // 400/404: try next model
       await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     }
+  }
+  // Last resort: ask the API which flash models this key can use.
+  if (!geminiDiscovered) {
+    geminiDiscovered = true;
+    try {
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': GEMINI_KEY } });
+      const json = await res.json();
+      const found = (json.models || [])
+        .filter((x) => (x.supportedGenerationMethods || []).includes('generateContent') && /flash/.test(x.name) && !/image|tts|audio|live|embed/.test(x.name))
+        .map((x) => x.name.replace('models/', ''))
+        .filter((n) => !GEMINI_MODELS.includes(n));
+      console.error('Gemini discovered models:', found.slice(0, 5).join(', '));
+      if (found.length) { GEMINI_MODELS.push(...found.slice(0, 3)); return geminiCall(body); }
+    } catch (e) { console.error('Gemini model discovery failed', e.message); }
   }
   throw lastErr;
 }
