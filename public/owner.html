@@ -174,7 +174,7 @@ $('#oform').onsubmit = async (e) => {
   const log = $('#olog');
   log.insertAdjacentHTML('beforeend', `<div class="msg user">${v.replace(/</g, '&lt;')}</div>`);
   const r = await post('/api/owner/chat', { sessionId: 'owner', message: v });
-  log.insertAdjacentHTML('beforeend', `<div class="msg bot">${(r.reply || r.error || '').replace(/</g, '&lt;')}</div>`);
+  log.insertAdjacentHTML('beforeend', `${r.fallback ? '<div class="trace">ⓘ AI model busy, built-in agent answered</div>' : ''}<div class="msg bot">${(r.reply || r.error || '').replace(/</g, '&lt;')}</div>`);
   log.scrollTop = 1e9; load();
 };
 $('#reset').onclick = async () => { if (confirm('Reset all demo data?')) { await post('/api/owner/reset'); prevIds = new Set(); load(); } };

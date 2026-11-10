@@ -290,10 +290,10 @@ export async function chat({ role = 'client', sessionId, clientName, message }) 
   sessions.set(key, s);
   s.history.push({ role: 'user', content: message });
   const ctx = { clientName: clientName || 'Guest', actions: [], trace: [], state: s.state };
-  let reply;
+  let reply; let fallback = !anthropic && !GEMINI_KEY;
   try {
     reply = anthropic ? await claudeTurn(role, s.history, ctx)
-      : GEMINI_KEY ? await geminiTurn(role, s.history, ctx).catch((e) => { console.error(e.message); return fallbackTurn(role, s.history, ctx); })
+      : GEMINI_KEY ? await geminiTurn(role, s.history, ctx).catch((e) => { console.error(e.message); fallback = true; return fallbackTurn(role, s.history, ctx); })
       : await fallbackTurn(role, s.history, ctx);
   } catch (e) {
     console.error(e);
@@ -304,5 +304,5 @@ export async function chat({ role = 'client', sessionId, clientName, message }) 
     .map((t) => `${t.tool}(${JSON.stringify(t.input)})`).join('; ');
   s.history.push({ role: 'assistant', content: (reply || '...') + (memo && anthropic === null && GEMINI_KEY ? `\n[tool context: ${memo}]` : '') });
   s.history = s.history.slice(-30);
-  return { reply, actions: ctx.actions, trace: ctx.trace, mode: AI_MODE };
+  return { reply, actions: ctx.actions, trace: ctx.trace, mode: AI_MODE, fallback: fallback && !!GEMINI_KEY };
 }

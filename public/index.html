@@ -94,6 +94,7 @@ async function send(text) {
   const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, clientName, message: text }) });
   const data = await r.json();
   typing.textContent = data.reply || data.error;
+  if (data.fallback) { const t = document.createElement('div'); t.className = 'trace'; t.textContent = 'ⓘ AI model busy, answered by HoldFast built-in agent'; $('#chat').insertBefore(t, typing); }
   if (data.trace?.length) { const t = document.createElement('div'); t.className = 'trace'; t.textContent = '⚙ ' + data.trace.map((x) => x.tool).join(' → '); $('#chat').insertBefore(t, typing); }
   for (const a of data.actions || []) if (a.type === 'approve_hold') renderApprove($('#chat'), a);
 }
