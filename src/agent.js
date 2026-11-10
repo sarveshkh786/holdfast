@@ -135,15 +135,21 @@ async function claudeTurn(role, history, ctx) {
 // ---------------- Gemini loop (function calling via REST) ----------------
 let geminiModel = null;
 let geminiDiscovered = false;
-async function geminiCall(body) {
+async function geminiCall(body, deadline = Date.now() + 20000) {
   // Try the working model first, then the others. Retry briefly on overload (429/500/503).
   const models = geminiModel ? [geminiModel, ...GEMINI_MODELS.filter((m) => m !== geminiModel)] : GEMINI_MODELS;
   let lastErr;
   for (const m of models) {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
-      });
+      const left = deadline - Date.now();
+      if (left < 1500) throw lastErr || new Error('Gemini: time budget exhausted');
+      let res;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
+          signal: AbortSignal.timeout(Math.min(9000, left)),
+        });
+      } catch (e) { lastErr = new Error(`Gemini ${m}: ${e.name === 'TimeoutError' ? 'timeout' : e.message}`); console.error(lastErr.message); break; }
       const json = await res.json().catch(() => ({}));
       if (res.ok) { geminiModel = m; return json; }
       if (res.status === 400 && body.generationConfig?.thinkingConfig && /thinking/i.test(json.error?.message || '')) {
@@ -160,14 +166,14 @@ async function geminiCall(body) {
   if (!geminiDiscovered) {
     geminiDiscovered = true;
     try {
-      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': GEMINI_KEY } });
+      const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': GEMINI_KEY }, signal: AbortSignal.timeout(5000) });
       const json = await res.json();
       const found = (json.models || [])
         .filter((x) => (x.supportedGenerationMethods || []).includes('generateContent') && /flash/.test(x.name) && !/image|tts|audio|live|embed/.test(x.name))
         .map((x) => x.name.replace('models/', ''))
         .filter((n) => !GEMINI_MODELS.includes(n));
       console.error('Gemini discovered models:', found.slice(0, 5).join(', '));
-      if (found.length) { GEMINI_MODELS.push(...found.slice(0, 3)); return geminiCall(body); }
+      if (found.length) { GEMINI_MODELS.push(...found.slice(0, 3)); return geminiCall(body, deadline); }
     } catch (e) { console.error('Gemini model discovery failed', e.message); }
   }
   throw lastErr;
@@ -182,13 +188,14 @@ const toGeminiTool = (t) => {
 async function geminiTurn(role, history, ctx) {
   const tools = role === 'owner' ? ownerTools : clientTools;
   const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const deadline = Date.now() + 16000; // whole turn, incl. tool round trips
   for (let i = 0; i < 8; i++) {
     const res = await geminiCall({
       system_instruction: { parts: [{ text: systemPrompt(role, ctx) }] },
       contents,
       tools: [{ functionDeclarations: tools.map(toGeminiTool) }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 800, thinkingConfig: { thinkingLevel: 'low' } },
-    });
+    }, deadline);
     const content = res.candidates?.[0]?.content;
     if (!content?.parts?.length) return 'Sorry, I could not answer that. Could you rephrase?';
     contents.push({ role: 'model', parts: content.parts });
