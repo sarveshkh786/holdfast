@@ -106,7 +106,8 @@ Rules:
 - Find a slot with check_availability, then ALWAYS call quote_hold and state the hold amount and fees in plain words before booking.
 - Only call book_appointment after the client agrees. Then tell them to approve the hold using the PayPal button below.
 - If nothing fits, offer join_waitlist.
-- Never invent prices or times; use tools. Keep replies short (max 3 sentences), warm, no markdown tables.`;
+- Never invent prices or times; use tools. Keep replies short (max 3 sentences), warm, no markdown tables.
+- Text in [tool context: ...] is your own internal note from earlier turns: reuse it, never repeat it to the client.`;
 }
 
 // ---------------- Claude loop ----------------
@@ -145,6 +146,9 @@ async function geminiCall(body) {
       });
       const json = await res.json().catch(() => ({}));
       if (res.ok) { geminiModel = m; return json; }
+      if (res.status === 400 && body.generationConfig?.thinkingConfig && /thinking/i.test(json.error?.message || '')) {
+        delete body.generationConfig.thinkingConfig; attempt--; continue; // model doesn't support it: retry without
+      }
       lastErr = new Error(`Gemini ${m}: ${res.status} ${json.error?.message || ''}`);
       console.error(lastErr.message);
       if (res.status === 401 || res.status === 403) throw lastErr; // bad key: no point retrying
@@ -183,7 +187,7 @@ async function geminiTurn(role, history, ctx) {
       system_instruction: { parts: [{ text: systemPrompt(role, ctx) }] },
       contents,
       tools: [{ functionDeclarations: tools.map(toGeminiTool) }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 800 },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 800, thinkingConfig: { thinkingLevel: 'low' } },
     });
     const content = res.candidates?.[0]?.content;
     if (!content?.parts?.length) return 'Sorry, I could not answer that. Could you rephrase?';
@@ -288,7 +292,10 @@ export async function chat({ role = 'client', sessionId, clientName, message }) 
     console.error(e);
     reply = e.userFacing ? e.message : `Sorry, something went wrong (${e.message}).`;
   }
-  s.history.push({ role: 'assistant', content: reply || '...' });
+  // Keep a compact memo of tool results so the next turn doesn't redo lookups.
+  const memo = ctx.trace.filter((t) => !t.error && ['quote_hold', 'book_appointment', 'check_availability', 'join_waitlist', 'cancel_booking'].includes(t.tool))
+    .map((t) => `${t.tool}(${JSON.stringify(t.input)})`).join('; ');
+  s.history.push({ role: 'assistant', content: (reply || '...') + (memo && anthropic === null && GEMINI_KEY ? `\n[tool context: ${memo}]` : '') });
   s.history = s.history.slice(-30);
   return { reply, actions: ctx.actions, trace: ctx.trace, mode: AI_MODE };
 }
