@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HoldFast · Owner dashboard</title>
+<link rel="stylesheet" href="/style.css" />
+<script src="/vendor/ag-grid/ag-grid-community.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="logo"><span class="mark">H</span> HoldFast <span id="biz" class="pill"></span> <span id="mode" class="pill"></span></div>
+  <nav><a href="/">Client chat</a><a href="/owner.html" class="active">Owner dashboard</a> <button id="reset" class="ghost" style="margin-left:16px;font-size:12px">Reset demo</button></nav>
+</header>
+
+<div class="dash">
+  <main>
+    <div class="kpis">
+      <div class="card kpi"><div class="l">Revenue protected (holds)</div><div class="v" id="k1">$0</div></div>
+      <div class="card kpi"><div class="l">Fees recovered</div><div class="v" id="k2">$0</div></div>
+      <div class="card kpi"><div class="l">Slots auto-refilled</div><div class="v" id="k3">0</div></div>
+      <div class="card kpi"><div class="l">Awaiting your review</div><div class="v" id="k4">0</div></div>
+    </div>
+
+    <div id="reviews"></div>
+
+    <div class="section-title">Calendar</div>
+    <div class="legend">
+      <span><i style="background:var(--held)"></i>Hold active</span>
+      <span><i style="background:#b9a37a"></i>Awaiting PayPal approval</span>
+      <span><i style="background:var(--accent)"></i>Needs review</span>
+      <span><i style="background:var(--ok)"></i>Attended (released)</span>
+      <span><i style="background:var(--danger)"></i>Fee captured</span>
+    </div>
+    <div class="card cal" id="cal"></div>
+
+    <div class="section-title" style="margin-top:18px">PayPal ledger</div>
+    <div id="ledger" class="ag-theme-quartz card"></div>
+  </main>
+
+  <aside class="side">
+    <div class="card ownerchat">
+      <div style="padding:12px 12px 0" class="section-title">Ask HoldFast Ops</div>
+      <div class="log" id="olog"><div class="msg bot">Tell me who showed up or didn't, e.g. “Sam arrived” or “Priya didn't show”.</div></div>
+      <form class="composer" id="oform"><input id="oinput" placeholder="Priya didn't show up" /><button class="primary">Send</button></form>
+    </div>
+    <div class="card">
+      <div style="padding:12px 12px 0" class="section-title">Live activity</div>
+      <div class="feed" id="feed"></div>
+    </div>
+    <div class="card">
+      <div style="padding:12px 12px 0" class="section-title">Waitlist</div>
+      <div class="feed" id="wl"></div>
+    </div>
+  </aside>
+</div>
+
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let cfg, state, grid, prevIds = new Set();
+const OPEN = 9, CLOSE = 19, PX = 64; // px per hour
+const tz = () => cfg.business.timezone;
+const fmtT = (iso) => new Date(iso).toLocaleTimeString('en-US', { timeZone: tz(), hour: 'numeric', minute: '2-digit' });
+const dayKey = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz() });
+const hoursIn = (iso) => { const p = new Intl.DateTimeFormat('en-US', { timeZone: tz(), hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(iso)); return +p.find(x=>x.type==='hour').value + +p.find(x=>x.type==='minute').value / 60; };
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json());
+
+function renderCal() {
+  const cal = $('#cal'); cal.innerHTML = '';
+  const days = [0, 1, 2].map((o) => { const d = new Date(Date.now() + o * 864e5); return { key: dayKey(d), label: d.toLocaleDateString('en-US', { timeZone: tz(), weekday: 'long', month: 'short', day: 'numeric' }) }; });
+  cal.insertAdjacentHTML('beforeend', `<div class="dayh"></div>` + days.map((d, i) => `<div class="dayh">${i === 0 ? 'Today · ' : ''}${d.label}</div>`).join(''));
+  const hours = document.createElement('div');
+  for (let h = OPEN; h < CLOSE; h++) hours.insertAdjacentHTML('beforeend', `<div class="hcell">${h % 12 || 12}${h < 12 ? 'am' : 'pm'}</div>`);
+  cal.appendChild(hours);
+  const visible = state.bookings.filter((b) => !['CANCELLED', 'EXPIRED'].includes(b.status));
+  for (const d of days) {
+    const col = document.createElement('div'); col.className = 'col';
+    for (let h = OPEN; h < CLOSE; h++) col.insertAdjacentHTML('beforeend', '<div class="slotline"></div>');
+    for (const b of visible.filter((x) => dayKey(x.start) === d.key)) {
+      const top = (hoursIn(b.start) - OPEN) * PX, height = Math.max(26, (new Date(b.end) - new Date(b.start)) / 36e5 * PX - 3);
+      const el = document.createElement('div');
+      el.className = `ev ${b.status}${prevIds.size && !prevIds.has(b.id + b.status) ? ' flash' : ''}`;
+      el.style.top = top + 'px'; el.style.height = height + 'px';
+      const tag = { HELD: `$${b.risk.hold} hold`, PENDING_APPROVAL: b.offer ? 'waitlist offer sent' : 'awaiting approval', NEEDS_REVIEW: 'review fee', ATTENDED: 'released', CHARGED: `$${b.charged} fee`, WAIVED: 'waived' }[b.status] || b.status;
+      el.innerHTML = `<b>${b.clientName}</b>${b.serviceName} · ${fmtT(b.start)}<br>${tag}${b.source === 'waitlist' ? ' · ↻ refilled' : ''}`;
+      el.onclick = () => openBooking(b);
+      col.appendChild(el);
+    }
+    cal.appendChild(col);
+  }
+  prevIds = new Set(state.bookings.map((b) => b.id + b.status));
+}
+
+function openBooking(b) {
+  const f = b.risk.factors.map((x) => `<div class="factor"><span>${x.factor}</span><span>${x.impact > 0 ? '+' : ''}${x.impact}</span></div>`).join('');
+  const actions = b.status === 'HELD'
+    ? `<button class="primary" data-a="attended">Showed up · release hold</button> <button data-a="no-show">Didn't show</button> <button class="ghost" data-a="waive">Waive</button>` : '';
+  $('#mbody').innerHTML = `
+    <div class="section-title">${b.status.replace('_', ' ')}</div>
+    <h3 style="margin:0 0 4px">${b.clientName} · ${b.serviceName}</h3>
+    <div style="color:#6b7280;font-size:14px;margin-bottom:12px">${new Date(b.start).toLocaleString('en-US', { timeZone: tz(), dateStyle: 'medium', timeStyle: 'short' })} · $${b.price}</div>
+    <div class="section-title">Why a $${b.risk.hold} hold? (risk ${b.risk.score}, ${b.risk.band})</div>
+    ${f}
+    <div style="font-size:12px;color:#6b7280;margin:8px 0 14px">Only booking behaviour is used, never personal attributes. Hold is capped at the service price.</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:14px">PayPal order ${b.orderId || '-'}<br>Authorization ${b.authorizationId || '-'}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${actions}<button class="ghost" data-a="close">Close</button></div>`;
+  $('#modal').classList.add('open');
+  $('#mbody').onclick = async (e) => {
+    const a = e.target.dataset.a; if (!a) return;
+    if (a !== 'close') { e.target.disabled = true; const r = await post(`/api/owner/bookings/${b.id}/${a}`); if (r.error) alert(r.error); }
+    $('#modal').classList.remove('open'); load();
+  };
+}
+$('#modal').onclick = (e) => { if (e.target.id === 'modal') $('#modal').classList.remove('open'); };
+
+function renderReviews() {
+  const rv = state.bookings.filter((b) => b.status === 'NEEDS_REVIEW');
+  $('#reviews').innerHTML = rv.map((b) => `
+    <div class="card review" data-id="${b.id}">
+      <b>${b.review.reason === 'NO_SHOW' ? 'No-show' : 'Late cancellation'}: ${b.clientName}</b> · ${b.serviceName}, ${fmtT(b.start)}
+      <div style="font-size:13px;color:#6b7280;margin-top:3px">Agent proposes charging part of the $${b.risk.hold} hold. Nothing moves until you confirm; the rest is released automatically.</div>
+      <div class="row">$<input type="number" min="1" max="${b.risk.hold}" value="${b.review.proposedFee}" />
+        <button class="danger" data-a="confirm">Confirm charge</button>
+        <button data-a="waive">Waive & release</button></div>
+    </div>`).join('');
+  $('#reviews').onclick = async (e) => {
+    const a = e.target.dataset.a; if (!a) return;
+    const card = e.target.closest('.review'); e.target.disabled = true;
+    const r = a === 'confirm'
+      ? await post(`/api/owner/bookings/${card.dataset.id}/confirm-charge`, { amount: +card.querySelector('input').value })
+      : await post(`/api/owner/bookings/${card.dataset.id}/waive`);
+    if (r.error) alert(r.error); load();
+  };
+}
+
+function renderGrid() {
+  const rows = state.ledger.map((l) => ({ ...l, time: new Date(l.at).toLocaleString('en-US', { timeZone: tz(), month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }));
+  if (!grid) {
+    grid = agGrid.createGrid($('#ledger'), {
+      rowData: rows,
+      columnDefs: [
+        { field: 'time', width: 130 },
+        { field: 'client', filter: true },
+        { field: 'service', filter: true },
+        { field: 'type', width: 110, filter: true, cellStyle: (p) => ({ fontWeight: 600, color: { HOLD: '#2d5fa8', CAPTURE: '#b4432f', RELEASE: '#2f7a5b' }[p.value] }) },
+        { field: 'amount', width: 100, valueFormatter: (p) => p.value ? `$${p.value}` : '-' },
+        { field: 'status', flex: 1 },
+        { field: 'ref', headerName: 'PayPal ref', flex: 1 },
+      ],
+      defaultColDef: { sortable: true, resizable: true },
+      animateRows: true,
+    });
+  } else grid.setGridOption('rowData', rows);
+}
+
+function renderSide() {
+  $('#feed').innerHTML = state.events.map((e) => `<div><time>${new Date(e.at).toLocaleTimeString('en-US', { timeZone: tz(), hour: 'numeric', minute: '2-digit' })}</time>${e.message}</div>`).join('');
+  const wl = state.waitlist.filter((w) => w.status !== 'FILLED');
+  $('#wl').innerHTML = wl.length ? wl.map((w) => `<div><b>${w.clientName}</b> · ${w.serviceName} · ${w.date} <span class="pill">${w.status.toLowerCase()}</span></div>`).join('') : '<div style="color:#6b7280">Nobody waiting</div>';
+  const s = state.summary;
+  $('#k1').textContent = `$${s.amount_held}`; $('#k2').textContent = `$${s.fees_captured}`;
+  $('#k3').textContent = s.slots_refilled; $('#k4').textContent = s.awaiting_review;
+}
+
+async function load() {
+  state = await (await fetch('/api/state')).json();
+  renderCal(); renderReviews(); renderGrid(); renderSide();
+}
+
+$('#oform').onsubmit = async (e) => {
+  e.preventDefault(); const v = $('#oinput').value.trim(); if (!v) return; $('#oinput').value = '';
+  const log = $('#olog');
+  log.insertAdjacentHTML('beforeend', `<div class="msg user">${v.replace(/</g, '&lt;')}</div>`);
+  const r = await post('/api/owner/chat', { sessionId: 'owner', message: v });
+  log.insertAdjacentHTML('beforeend', `<div class="msg bot">${(r.reply || r.error || '').replace(/</g, '&lt;')}</div>`);
+  log.scrollTop = 1e9; load();
+};
+$('#reset').onclick = async () => { if (confirm('Reset all demo data?')) { await post('/api/owner/reset'); prevIds = new Set(); load(); } };
+
+(async () => {
+  cfg = await (await fetch('/api/config')).json();
+  $('#biz').textContent = cfg.business.name;
+  $('#mode').textContent = `${cfg.simulated ? 'PayPal: simulated' : 'PayPal sandbox'} · AI: ${cfg.aiMode}`;
+  if (cfg.simulated) $('#mode').classList.add('warn');
+  await load();
+  const es = new EventSource('/api/stream'); es.onmessage = () => load();
+})();
+</script>
+</body>
+</html>

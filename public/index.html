@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HoldFast · Book at Studio Lumen</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="top">
+  <div class="logo"><span class="mark">H</span> HoldFast <span id="mode" class="pill"></span></div>
+  <nav><a href="/" class="active">Client chat</a><a href="/owner.html">Owner dashboard</a></nav>
+</header>
+
+<div class="chat-wrap">
+  <div class="card hero">
+    <h1 id="bizname">Book an appointment</h1>
+    <p>No deposits. You approve a refundable PayPal hold. Show up and it's released in full.</p>
+    <div class="who">
+      Chatting as
+      <select id="who"></select>
+      <input id="newname" placeholder="or type a new name" style="width:180px" />
+      <button id="setname" class="ghost">Use</button>
+    </div>
+  </div>
+
+  <div id="offers"></div>
+
+  <div class="card">
+    <div id="chat" class="chat"></div>
+    <div class="chips" id="chips"></div>
+    <form class="composer" id="form">
+      <input id="input" autocomplete="off" placeholder="e.g. Can I get a haircut today around 6pm?" />
+      <button class="primary">Send</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let cfg, clientName = localStorage.getItem('hf_client') || 'Ravi Kumar';
+let sessionId = Math.random().toString(36).slice(2);
+let sdkLoaded = null;
+
+function loadPayPal() {
+  if (cfg.simulated) return Promise.resolve();
+  if (sdkLoaded) return sdkLoaded;
+  sdkLoaded = new Promise((ok, bad) => {
+    const s = document.createElement('script');
+    s.src = `https://www.paypal.com/sdk/js?client-id=${cfg.paypalClientId}&currency=${cfg.currency}&intent=authorize&components=buttons`;
+    s.onload = ok; s.onerror = bad; document.head.appendChild(s);
+  });
+  return sdkLoaded;
+}
+
+function add(cls, text) {
+  const d = document.createElement('div'); d.className = `msg ${cls}`; d.textContent = text;
+  $('#chat').appendChild(d); $('#chat').scrollTop = 1e9; return d;
+}
+
+async function approveDone(bookingId, orderId, box) {
+  const r = await fetch(`/api/bookings/${bookingId}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId }) });
+  const b = await r.json();
+  if (b.error) { box.innerHTML = `<div class="t">Couldn't place hold</div><div class="s">${b.error}</div>`; return; }
+  const when = new Date(b.start).toLocaleString('en-US', { timeZone: cfg.business.timezone, weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  box.innerHTML = `<div class="t">✓ Booked: ${b.serviceName}, ${when}</div><div class="s">$${b.risk.hold} hold authorized on PayPal (ref ${b.authorizationId}). You won't be charged if you show up.</div>`;
+  refreshOffers();
+}
+
+async function renderApprove(container, a) {
+  const box = document.createElement('div'); box.className = 'action';
+  box.innerHTML = `<div class="t">Approve a $${a.amount} refundable hold</div><div class="s">${a.label}. Released in full when you attend.</div><div class="btn"></div>`;
+  container.appendChild(box); $('#chat').scrollTop = 1e9;
+  const slot = box.querySelector('.btn');
+  await loadPayPal();
+  if (cfg.simulated) {
+    const b = document.createElement('button'); b.className = 'sim-btn'; b.textContent = 'PayPal · Approve hold (simulated)';
+    b.onclick = () => { b.disabled = true; approveDone(a.bookingId, a.orderId, box); };
+    slot.appendChild(b);
+  } else {
+    paypal.Buttons({
+      style: { layout: 'horizontal', tagline: false, height: 40 },
+      createOrder: () => a.orderId,
+      onApprove: (data) => approveDone(a.bookingId, data.orderID, box),
+      onError: (err) => { slot.textContent = 'PayPal error: ' + err; },
+    }).render(slot);
+  }
+}
+
+async function send(text) {
+  if (!text.trim()) return;
+  add('user', text);
+  const typing = add('bot', '…');
+  const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, clientName, message: text }) });
+  const data = await r.json();
+  typing.textContent = data.reply || data.error;
+  if (data.trace?.length) { const t = document.createElement('div'); t.className = 'trace'; t.textContent = '⚙ ' + data.trace.map((x) => x.tool).join(' → '); $('#chat').insertBefore(t, typing); }
+  for (const a of data.actions || []) if (a.type === 'approve_hold') renderApprove($('#chat'), a);
+}
+
+async function refreshOffers() {
+  const offers = await (await fetch(`/api/offers?client=${encodeURIComponent(clientName)}`)).json();
+  const wrap = $('#offers');
+  const seen = new Set([...wrap.querySelectorAll('[data-id]')].map((x) => x.dataset.id));
+  for (const o of offers) {
+    if (seen.has(o.id)) continue;
+    const when = new Date(o.start).toLocaleString('en-US', { timeZone: cfg.business.timezone, weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    const card = document.createElement('div'); card.className = 'card offer'; card.dataset.id = o.id;
+    card.innerHTML = `<b>🎉 A slot just opened for you: ${o.serviceName}, ${when}</b><div style="font-size:13px;color:#6b7280;margin:4px 0 6px">You were on the waitlist. Offer expires in 15 minutes.</div>`;
+    wrap.appendChild(card);
+    renderApprove(card, { bookingId: o.id, orderId: o.orderId, amount: o.risk.hold, label: `${o.serviceName}, ${when}` });
+  }
+}
+
+function setClient(name) {
+  clientName = name; localStorage.setItem('hf_client', name);
+  sessionId = Math.random().toString(36).slice(2);
+  $('#chat').innerHTML = ''; $('#offers').innerHTML = '';
+  add('sys', `New conversation as ${name}`);
+  add('bot', `Hi ${name.split(' ')[0]}! I'm the receptionist at ${cfg.business.name}. What would you like to book?`);
+  refreshOffers();
+}
+
+(async () => {
+  cfg = await (await fetch('/api/config')).json();
+  const st = await (await fetch('/api/state')).json();
+  $('#bizname').textContent = `Book at ${cfg.business.name}`;
+  $('#mode').textContent = `${cfg.simulated ? 'PayPal: simulated' : 'PayPal sandbox'} · AI: ${cfg.aiMode}`;
+  if (cfg.simulated) $('#mode').classList.add('warn');
+  const names = [...new Set([clientName, ...st.clients.map((c) => c.name)])];
+  $('#who').innerHTML = names.map((n) => `<option ${n === clientName ? 'selected' : ''}>${n}</option>`).join('');
+  $('#who').onchange = (e) => setClient(e.target.value);
+  $('#setname').onclick = () => { const n = $('#newname').value.trim(); if (n) { $('#who').insertAdjacentHTML('afterbegin', `<option selected>${n}</option>`); setClient(n); $('#newname').value=''; } };
+  const chips = ['What services do you have?', 'Haircut today around 6pm', 'Facial tomorrow at 11am', 'Cancel my booking', 'Put me on the waitlist'];
+  $('#chips').innerHTML = chips.map((c) => `<button type="button">${c}</button>`).join('');
+  $('#chips').onclick = (e) => { if (e.target.tagName === 'BUTTON') send(e.target.textContent); };
+  $('#form').onsubmit = (e) => { e.preventDefault(); const v = $('#input').value; $('#input').value = ''; send(v); };
+  setClient(clientName);
+  setInterval(refreshOffers, 4000);
+})();
+</script>
+</body>
+</html>
