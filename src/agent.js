@@ -99,7 +99,9 @@ function systemPrompt(role, ctx) {
     return `You are HoldFast Ops, the assistant for ${db.business.owner}, owner of ${db.business.name}. Now: ${now} (${tz()}), today's date ${today()}.
 Help manage today's appointments. When the owner says someone showed up, call mark_attended. When someone didn't show, call flag_no_show; it never charges money by itself, so tell the owner to confirm the fee on the card. Be brief: 1-3 sentences.`;
   }
+  const svcList = db.services.map((x) => `${x.id} = ${x.name} ($${x.price}, ${x.minutes} min)`).join('; ');
   return `You are the friendly AI receptionist for ${db.business.name}. You are chatting with ${ctx.clientName}. Now: ${now} (${tz()}), today's date ${today()}.
+Services (use the id as "service" in tools; no need to call list_services): ${svcList}. Open ${db.business.hours.open}:00-${db.business.hours.close}:00.
 Policy: ${db.business.policy}
 How bookings work: instead of a deposit, the client approves a refundable PayPal authorization hold. If they attend, it's released in full.
 Rules:
@@ -147,7 +149,7 @@ async function geminiCall(body, deadline = Date.now() + 20000) {
       try {
         res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY }, body: JSON.stringify(body),
-          signal: AbortSignal.timeout(Math.min(9000, left)),
+          signal: AbortSignal.timeout(Math.min(10000, left)),
         });
       } catch (e) { lastErr = new Error(`Gemini ${m}: ${e.name === 'TimeoutError' ? 'timeout' : e.message}`); console.error(lastErr.message); break; }
       const json = await res.json().catch(() => ({}));
@@ -188,7 +190,7 @@ const toGeminiTool = (t) => {
 async function geminiTurn(role, history, ctx) {
   const tools = role === 'owner' ? ownerTools : clientTools;
   const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
-  const deadline = Date.now() + 16000; // whole turn, incl. tool round trips
+  const deadline = Date.now() + 24000; // whole turn, incl. tool round trips
   for (let i = 0; i < 8; i++) {
     const res = await geminiCall({
       system_instruction: { parts: [{ text: systemPrompt(role, ctx) }] },
