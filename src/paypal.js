@@ -107,7 +107,7 @@ export async function authorizeOrder(orderId) {
 const isSeed = (id) => String(id).startsWith('AUTH-SEED');
 
 export async function captureHold(authorizationId, amount, { note, final = true } = {}) {
-  if (isSeed(authorizationId)) return { captureId: simId('CAP'), status: 'COMPLETED', amount, simulated: true };
+  if (isSeed(authorizationId)) return { captureId: `CAP-SEED-${crypto.randomBytes(3).toString('hex').toUpperCase()} (demo seed)`, status: 'COMPLETED', amount, simulated: true };
   if (SIMULATED) {
     const a = sim.auths.get(authorizationId);
     if (!a) throw new Error('Unknown simulated authorization');

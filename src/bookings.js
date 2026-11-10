@@ -137,7 +137,7 @@ export async function ownerConfirmCharge(bookingId, amount) {
   b.status = 'CHARGED';
   b.charged = fee;
   store.save();
-  store.addLedger({ bookingId: b.id, client: b.clientName, service: b.serviceName, type: 'CAPTURE', amount: fee, ref: cap.captureId, status: `Captured, $${(b.risk.hold - fee).toFixed(0)} released` });
+  store.addLedger({ bookingId: b.id, client: b.clientName, service: b.serviceName, type: 'CAPTURE', amount: fee, ref: cap.captureId, status: b.risk.hold - fee > 0 ? `Captured; $${(b.risk.hold - fee).toFixed(0)} released to client` : 'Captured in full' });
   store.logEvent('fee.captured', `Owner approved $${fee} ${b.review.reason === 'NO_SHOW' ? 'no-show' : 'late-cancel'} fee from ${b.clientName}`, { bookingId: b.id });
   notify();
   return b;
