@@ -59,7 +59,14 @@ export async function confirmApproval(bookingId, orderId) {
   const b = store.booking(bookingId) || fail('Booking not found');
   if (b.status === 'HELD') return b;
   if (b.orderId !== orderId) fail('Order does not match booking');
-  const auth = await paypal.authorizeOrder(orderId);
+  let auth;
+  try { auth = await paypal.authorizeOrder(orderId); }
+  catch (e) {
+    const issue = e.details?.details?.[0]?.issue || '';
+    if (/ORDER_NOT_APPROVED|PAYER_ACTION_REQUIRED/.test(issue)) fail('PayPal has not received your approval yet. Please complete the PayPal window.');
+    if (/ORDER_ALREADY_AUTHORIZED/.test(issue)) fail('This hold was already placed.');
+    throw e;
+  }
   Object.assign(b, { status: 'HELD', authorizationId: auth.authorizationId, holdExpires: auth.expiration_time });
   store.save();
   store.addLedger({ bookingId: b.id, client: b.clientName, service: b.serviceName, type: 'HOLD', amount: b.risk.hold, ref: auth.authorizationId, status: 'Authorized' });
